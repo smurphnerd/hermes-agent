@@ -1925,14 +1925,26 @@ class DiscordAdapter(BasePlatformAdapter):
         if resolved_count:
             print(f"[{self.name}] Updated DISCORD_ALLOWED_USERS with {resolved_count} resolved ID(s)")
 
+    @staticmethod
+    def _wrap_latex_in_backticks(text: str) -> str:
+        """Wrap LaTeX ($...$ and $$...$$) in backticks for Discord rendering."""
+        if not text:
+            return text
+        import re
+        # Wrap $$...$$ (block) in backticks if not already wrapped
+        result = re.sub(r'(?<!`)(\$\$[^`]+?\$\$)(?!`)', r'`\1`', text)
+        # Wrap $...$ (inline) in backticks if not already wrapped
+        result = re.sub(r'(?<!`|\$)(\$(?!\$)[^\n$`]+?\$)(?!\$|`)', r'`\1`', result)
+        return result
+
     def format_message(self, content: str) -> str:
         """
         Format message for Discord.
 
         Discord uses its own markdown variant.
         """
-        # Discord markdown is fairly standard, no special escaping needed
-        return content
+        # Wrap LaTeX in backticks so Discord renders it
+        return self._wrap_latex_in_backticks(content)
 
     async def _run_simple_slash(
         self,

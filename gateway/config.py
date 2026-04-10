@@ -629,6 +629,7 @@ def load_gateway_config() -> GatewayConfig:
                     os.environ["DISCORD_FREE_RESPONSE_CHANNELS"] = str(frc)
                 if "auto_thread" in discord_cfg and not os.getenv("DISCORD_AUTO_THREAD"):
                     os.environ["DISCORD_AUTO_THREAD"] = str(discord_cfg["auto_thread"]).lower()
+<<<<<<< HEAD
                 if "reactions" in discord_cfg and not os.getenv("DISCORD_REACTIONS"):
                     os.environ["DISCORD_REACTIONS"] = str(discord_cfg["reactions"]).lower()
                 # ignored_channels: channels where bot never responds (even when mentioned)
@@ -756,6 +757,8 @@ def load_gateway_config() -> GatewayConfig:
                 if "dm_mention_threads" in matrix_cfg and not os.getenv("MATRIX_DM_MENTION_THREADS"):
                     os.environ["MATRIX_DM_MENTION_THREADS"] = str(matrix_cfg["dm_mention_threads"]).lower()
 
+                if "reply_to_mode" in discord_cfg and not os.getenv("DISCORD_REPLY_TO_MODE"):
+                    os.environ["DISCORD_REPLY_TO_MODE"] = str(discord_cfg["reply_to_mode"]).lower()
     except Exception as e:
         logger.warning(
             "Failed to process config.yaml — falling back to .env / gateway.json values. "
@@ -886,6 +889,10 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
         config.platforms[Platform.DISCORD].enabled = True
         config.platforms[Platform.DISCORD].token = discord_token
     
+    discord_reply_mode = os.getenv("DISCORD_REPLY_TO_MODE")
+    if discord_reply_mode and Platform.DISCORD in config.platforms:
+        config.platforms[Platform.DISCORD].reply_to_mode = discord_reply_mode
+
     discord_home = os.getenv("DISCORD_HOME_CHANNEL")
     if discord_home and Platform.DISCORD in config.platforms:
         config.platforms[Platform.DISCORD].home_channel = HomeChannel(
