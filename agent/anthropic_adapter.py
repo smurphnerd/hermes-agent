@@ -1375,6 +1375,7 @@ def build_anthropic_kwargs(
             sys_injection = {
                 "type": "text",
                 "text": f"<system-instructions>\n{original_system_text}\n</system-instructions>",
+                "cache_control": {"type": "ephemeral"},
             }
             if anthropic_messages:
                 first_msg = anthropic_messages[0]
