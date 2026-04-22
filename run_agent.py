@@ -9523,6 +9523,10 @@ class AIAgent:
                     elif self.api_mode == "anthropic_messages":
                         stop_reason_map = {"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length", "stop_sequence": "stop"}
                         finish_reason = stop_reason_map.get(response.stop_reason, "stop")
+                    elif self.api_mode == "claude_code":
+                        # response is the (assistant_message, finish_reason) tuple
+                        # returned by normalize_claude_code_response.
+                        assistant_message, finish_reason = response
                     else:
                         finish_reason = response.choices[0].finish_reason
                         assistant_message = response.choices[0].message
