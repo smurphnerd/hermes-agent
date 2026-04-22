@@ -104,7 +104,28 @@ async def run_claude_code(
         extra_flags=extra_flags,
     )
 
-    logger.info("Claude Code command: %s", " ".join(cmd[:6]) + " ...")
+    # Build a redacted view of the command for logging: show flag names
+    # and a size-summary for each value so we can diagnose issues without
+    # dumping 20k tokens of system prompt into the log.
+    def _redact(value: str) -> str:
+        if value is None:
+            return "<None>"
+        n = len(value)
+        if n <= 60:
+            return repr(value)
+        return f"<{n} chars>"
+
+    redacted = []
+    i = 0
+    while i < len(cmd):
+        tok = cmd[i]
+        if tok.startswith("--") and i + 1 < len(cmd) and not cmd[i + 1].startswith("-"):
+            redacted.append(f"{tok}={_redact(cmd[i + 1])}")
+            i += 2
+        else:
+            redacted.append(_redact(tok) if len(tok) > 60 else tok)
+            i += 1
+    logger.info("Claude Code command: %s", " ".join(redacted))
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -129,7 +150,7 @@ async def run_claude_code(
     stderr_str = stderr.decode("utf-8", errors="replace").strip()
 
     if stderr_str:
-        logger.debug("Claude Code stderr: %s", stderr_str[:500])
+        logger.info("Claude Code stderr (exit=%s): %s", process.returncode, stderr_str[:2000])
 
     if not stdout_str:
         raise ClaudeCodeError(
@@ -146,6 +167,10 @@ async def run_claude_code(
         )
 
     if result.get("is_error"):
+        # Log the full raw result so we can see exactly what claude returned
+        # (api_error_status, request_id, service_tier, etc.) when diagnosing
+        # quota/billing failures.
+        logger.warning("Claude Code returned is_error=true. Raw result: %s", json.dumps(result)[:3000])
         raise ClaudeCodeError(
             result.get("result", "Unknown Claude Code error"),
             result=result,
