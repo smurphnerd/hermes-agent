@@ -1514,6 +1514,8 @@ def select_provider_and_model(args=None):
         _model_flow_google_gemini_cli(config, current_model)
     elif selected_provider == "copilot-acp":
         _model_flow_copilot_acp(config, current_model)
+    elif selected_provider == "claude-code":
+        _model_flow_claude_code(config, current_model)
     elif selected_provider == "copilot":
         _model_flow_copilot(config, current_model)
     elif selected_provider == "custom":
@@ -3268,6 +3270,61 @@ def _model_flow_copilot_acp(config, current_model=""):
     deactivate_provider()
 
     print(f"Default model set to: {selected} (via {pconfig.name})")
+
+
+def _model_flow_claude_code(config, current_model=""):
+    """Claude Code CLI flow — shells out to `claude -p`.
+
+    No API key is needed (Claude Code manages its own auth). We just need
+    the `claude` binary on PATH and a model selection.
+    """
+    import shutil
+    from hermes_cli.auth import (
+        _prompt_model_selection,
+        _save_model_choice,
+        deactivate_provider,
+    )
+    from hermes_cli.config import load_config, save_config
+    from hermes_cli.models import _PROVIDER_MODELS
+
+    del config
+
+    provider_id = "claude-code"
+
+    claude_path = shutil.which("claude")
+    if claude_path is None:
+        print("  ⚠ `claude` CLI not found on PATH.")
+        print("  Install Claude Code: https://docs.anthropic.com/en/docs/claude-code")
+        return
+
+    print(f"  Claude Code CLI found at: {claude_path}")
+    print("  Hermes will route turns through `claude -p` — Claude Code manages its own auth.")
+    print()
+
+    model_list = _PROVIDER_MODELS.get(provider_id, [])
+    if not model_list:
+        model_list = ["sonnet", "opus", "haiku"]
+
+    selected = _prompt_model_selection(model_list, current_model=current_model)
+    if not selected:
+        print("No change.")
+        return
+
+    _save_model_choice(selected)
+
+    cfg = load_config()
+    model = cfg.get("model")
+    if not isinstance(model, dict):
+        model = {"default": model} if model else {}
+        cfg["model"] = model
+    model["provider"] = provider_id
+    model.pop("base_url", None)
+    model.pop("api_key", None)
+    model["api_mode"] = "claude_code"
+    save_config(cfg)
+    deactivate_provider()
+
+    print(f"Default model set to: {selected} (via Claude Code CLI)")
 
 
 def _model_flow_kimi(config, current_model=""):
