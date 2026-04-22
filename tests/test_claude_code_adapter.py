@@ -262,7 +262,11 @@ def test_normalize_response_usage():
 
 # ── build_claude_code_kwargs tests ───────────────────────────────────
 
-def test_build_kwargs_extracts_system_and_user():
+def test_build_kwargs_wraps_system_prompt_in_user_message():
+    """Hermes's system prompt is NOT passed via --system-prompt (which would
+    replace Claude Code's default and trip Anthropic's quota checks). Instead
+    it's prepended to the user message wrapped in <system-instructions> tags.
+    """
     from agent.claude_code_adapter import build_claude_code_kwargs
 
     messages = [
@@ -271,8 +275,11 @@ def test_build_kwargs_extracts_system_and_user():
     ]
     kwargs = build_claude_code_kwargs(model="sonnet", messages=messages)
     assert kwargs["model"] == "sonnet"
-    assert kwargs["system_prompt"] == "You are helpful."
-    assert kwargs["prompt"] == "Hello there"
+    assert "system_prompt" not in kwargs
+    assert "<system-instructions>" in kwargs["prompt"]
+    assert "You are helpful." in kwargs["prompt"]
+    assert "</system-instructions>" in kwargs["prompt"]
+    assert kwargs["prompt"].endswith("Hello there")
 
 
 def test_build_kwargs_multi_turn_extracts_latest_user():
@@ -285,8 +292,9 @@ def test_build_kwargs_multi_turn_extracts_latest_user():
         {"role": "user", "content": "Second message"},
     ]
     kwargs = build_claude_code_kwargs(model="opus", messages=messages)
-    assert kwargs["prompt"] == "Second message"
-    assert kwargs["system_prompt"] == "Be concise."
+    assert kwargs["prompt"].endswith("Second message")
+    assert "Be concise." in kwargs["prompt"]
+    assert "system_prompt" not in kwargs
 
 
 def test_build_kwargs_reasoning_config():
