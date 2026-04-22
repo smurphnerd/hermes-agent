@@ -32,6 +32,32 @@ _CLAUDE_AUTH_ENV_VARS = (
 )
 
 
+def _dump_failing_command(cmd: List[str], cwd: Optional[str]) -> None:
+    """Write a shell script that replays the exact failing `claude -p`
+    invocation so the user can run it from their shell and compare."""
+    import shlex
+    from hermes_constants import get_hermes_home
+
+    dump_dir = get_hermes_home() / "logs"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    dump_path = dump_dir / "claude_code_last_failing_command.sh"
+
+    lines = ["#!/usr/bin/env bash", "# Last failing `claude -p` invocation from hermes.", "# Run this directly in your shell to reproduce."]
+    if cwd:
+        lines.append(f"cd {shlex.quote(cwd)}")
+    lines.append("")
+    lines.append("exec " + " ".join(shlex.quote(tok) for tok in cmd))
+    lines.append("")
+
+    dump_path.write_text("\n".join(lines))
+    os.chmod(dump_path, 0o755)
+    logger.info(
+        "Wrote replay script for the failing claude -p invocation to %s — "
+        "run it from your shell to reproduce exactly what hermes sent.",
+        dump_path,
+    )
+
+
 def _env_for_claude_subprocess() -> Dict[str, str]:
     """Build subprocess env, stripping anthropic auth vars that would
     override Claude Code's own OAuth login."""
@@ -201,6 +227,12 @@ async def run_claude_code(
         # (api_error_status, request_id, service_tier, etc.) when diagnosing
         # quota/billing failures.
         logger.warning("Claude Code returned is_error=true. Raw result: %s", json.dumps(result)[:3000])
+        # Dump the exact failing invocation to a replay script so the user
+        # can run it verbatim from a shell and compare against hermes.
+        try:
+            _dump_failing_command(cmd, cwd)
+        except Exception as _dump_err:
+            logger.debug("Failed to dump replay script: %s", _dump_err)
         raise ClaudeCodeError(
             result.get("result", "Unknown Claude Code error"),
             result=result,
