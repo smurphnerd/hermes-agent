@@ -155,6 +155,10 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="openai_chat",
         base_url_env_var="OLLAMA_BASE_URL",
     ),
+    "claude-code": HermesOverlay(
+        transport="claude_code",
+        auth_type="external_process",
+    ),
 }
 
 
@@ -306,6 +310,7 @@ TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "anthropic_messages": "anthropic_messages",
     "codex_responses": "codex_responses",
     "bedrock_converse": "bedrock_converse",
+    "claude_code": "claude_code",
 }
 
 
@@ -428,6 +433,8 @@ def determine_api_mode(provider: str, base_url: str = "") -> str:
         return TRANSPORT_TO_API_MODE.get(pdef.transport, "chat_completions")
 
     # Direct provider checks for providers not in HERMES_OVERLAYS
+    if provider == "claude-code":
+        return "claude_code"
     if provider == "bedrock":
         return "bedrock_converse"
 

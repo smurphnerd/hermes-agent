@@ -838,7 +838,7 @@ class AIAgent:
         self.provider = provider_name or ""
         self.acp_command = acp_command or command
         self.acp_args = list(acp_args or args or [])
-        if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse"}:
+        if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "claude_code"}:
             self.api_mode = api_mode
         elif self.provider == "openai-codex":
             self.api_mode = "codex_responses"
@@ -861,6 +861,8 @@ class AIAgent:
         elif self.provider == "bedrock" or "bedrock-runtime" in self._base_url_lower:
             # AWS Bedrock — auto-detect from provider name or base URL.
             self.api_mode = "bedrock_converse"
+        elif self.provider == "claude-code":
+            self.api_mode = "claude_code"
         else:
             self.api_mode = "chat_completions"
 
@@ -1146,6 +1148,14 @@ class AIAgent:
             if not self.quiet_mode:
                 _gr_label = " + Guardrails" if self._bedrock_guardrail_config else ""
                 print(f"🤖 AI Agent initialized with model: {self.model} (AWS Bedrock, {self._bedrock_region}{_gr_label})")
+        elif self.api_mode == "claude_code":
+            from agent.claude_code_adapter import find_claude_binary
+            self._claude_code_binary = find_claude_binary()
+            self._claude_code_session_id = None
+            self.client = None
+            self._client_kwargs = {}
+            if not self.quiet_mode:
+                print(f"🤖 AI Agent initialized with model: {self.model} (Claude Code CLI)")
         else:
             if api_key and base_url:
                 # Explicit credentials from CLI/gateway — construct directly.
@@ -5173,6 +5183,17 @@ class AIAgent:
                     client = _get_bedrock_runtime_client(region)
                     raw_response = client.converse(**api_kwargs)
                     result["response"] = normalize_converse_response(raw_response)
+                elif self.api_mode == "claude_code":
+                    from agent.claude_code_adapter import run_claude_code, normalize_claude_code_response
+                    cc_kwargs = {k: v for k, v in api_kwargs.items() if not k.startswith("__")}
+                    loop = asyncio.new_event_loop()
+                    try:
+                        raw_result = loop.run_until_complete(run_claude_code(**cc_kwargs))
+                    finally:
+                        loop.close()
+                    if raw_result.get("session_id"):
+                        self._claude_code_session_id = raw_result["session_id"]
+                    result["response"] = normalize_claude_code_response(raw_result)
                 else:
                     request_client_holder["client"] = self._create_request_openai_client(reason="chat_completion_request")
                     result["response"] = request_client_holder["client"].chat.completions.create(**api_kwargs)
@@ -6653,6 +6674,18 @@ class AIAgent:
 
     def _build_api_kwargs(self, api_messages: list) -> dict:
         """Build the keyword arguments dict for the active API mode."""
+        if self.api_mode == "claude_code":
+            from agent.claude_code_adapter import build_claude_code_kwargs
+            return {
+                "__claude_code__": True,
+                **build_claude_code_kwargs(
+                    model=self.model,
+                    messages=api_messages,
+                    reasoning_config=self.reasoning_config,
+                    session_id=getattr(self, "_claude_code_session_id", None),
+                ),
+            }
+
         if self.api_mode == "anthropic_messages":
             from agent.anthropic_adapter import build_anthropic_kwargs
             anthropic_messages = self._prepare_anthropic_messages_for_api(api_messages)
@@ -10709,6 +10742,8 @@ class AIAgent:
                     assistant_message, finish_reason = normalize_anthropic_response(
                         response, strip_tool_prefix=self._is_anthropic_oauth
                     )
+                elif self.api_mode == "claude_code":
+                    assistant_message, finish_reason = response
                 else:
                     assistant_message = response.choices[0].message
                 
