@@ -66,10 +66,10 @@ _NO_SAMPLING_PARAMS_SUBSTRINGS = ("4-7", "4.7")
 # starves thinking-enabled models (thinking tokens count toward the limit).
 _ANTHROPIC_OUTPUT_LIMITS = {
     # Claude 4.7
-    "claude-opus-4-7":   128_000,
+    "claude-opus-4-7":    32_000,
     # Claude 4.6
-    "claude-opus-4-6":   128_000,
-    "claude-sonnet-4-6":  64_000,
+    "claude-opus-4-6":    64_000,
+    "claude-sonnet-4-6":  32_000,
     # Claude 4.5
     "claude-opus-4-5":    64_000,
     "claude-sonnet-4-5":  64_000,
@@ -149,8 +149,13 @@ def _forbids_sampling_params(model: str) -> bool:
 # that still gate on the headers continue to get the enhanced features.
 # Migration guide: remove these if you no longer support ≤4.5 models.
 _COMMON_BETAS = [
-    "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
+    "claude-code-20250219",
+    "oauth-2025-04-20",
+    "context-management-2025-06-27",
+    "prompt-caching-scope-2026-01-05",
+    "advisor-tool-2026-03-01",
+    "advanced-tool-use-2025-11-20",
+    "afk-mode-2026-01-31",
 ]
 # MiniMax's Anthropic-compatible endpoints fail tool-use requests when
 # the fine-grained tool streaming beta is present.  Omit it so tool calls
@@ -347,6 +352,7 @@ def build_anthropic_client(api_key: str, base_url: str = None, timeout: float = 
             "anthropic-beta": ",".join(all_betas),
             "user-agent": f"claude-cli/{_get_claude_code_version()} (external, cli)",
             "x-app": "cli",
+            "anthropic-dangerous-direct-browser-access": "true",
         }
     else:
         # Regular API key → x-api-key header + common betas
@@ -1422,7 +1428,7 @@ def build_anthropic_kwargs(
         kwargs["tools"] = anthropic_tools
         # Map OpenAI tool_choice to Anthropic format
         if tool_choice == "auto" or tool_choice is None:
-            kwargs["tool_choice"] = {"type": "auto"}
+            pass
         elif tool_choice == "required":
             kwargs["tool_choice"] = {"type": "any"}
         elif tool_choice == "none":
@@ -1448,8 +1454,7 @@ def build_anthropic_kwargs(
             budget = THINKING_BUDGET.get(effort, 8000)
             if _supports_adaptive_thinking(model):
                 kwargs["thinking"] = {
-                    "type": "adaptive",
-                    "display": "summarized",
+                    "type": "adaptive"
                 }
                 adaptive_effort = ADAPTIVE_EFFORT_MAP.get(effort, "medium")
                 # Downgrade xhigh→max on models that don't list xhigh as a
@@ -1487,6 +1492,17 @@ def build_anthropic_kwargs(
             betas.extend(_OAUTH_ONLY_BETAS)
         betas.append(_FAST_MODE_BETA)
         kwargs["extra_headers"] = {"anthropic-beta": ",".join(betas)}
+
+        kwargs["context_management"] = {
+            "edits": [
+                {
+                    "type": "clear_thinking_20251015",
+                    "keep": "all"
+                }
+            ]
+        }
+
+    kwargs["extra_query"] = {"beta": "true"}
 
     return kwargs
 
