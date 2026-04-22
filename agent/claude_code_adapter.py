@@ -11,11 +11,40 @@ returns a JSON result blob. Multi-turn uses --resume <session_id>.
 import asyncio
 import json
 import logging
+import os
 import shutil
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Env vars that would override Claude Code's own auth. When hermes spawns
+# `claude -p`, the subprocess inherits hermes's env — which often contains
+# ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN left over from when the user
+# was on the plain `anthropic` provider. Those would point claude at a
+# different (usually exhausted) account instead of its own saved OAuth login.
+_CLAUDE_AUTH_ENV_VARS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_API_KEY",
+)
+
+
+def _env_for_claude_subprocess() -> Dict[str, str]:
+    """Build subprocess env, stripping anthropic auth vars that would
+    override Claude Code's own OAuth login."""
+    env = dict(os.environ)
+    stripped = [v for v in _CLAUDE_AUTH_ENV_VARS if v in env]
+    for var in stripped:
+        env.pop(var, None)
+    if stripped:
+        logger.info(
+            "Claude Code subprocess env: stripped %s so `claude` uses its own OAuth login",
+            ", ".join(stripped),
+        )
+    return env
 
 _STOP_REASON_MAP = {
     "end_turn": "stop",
@@ -132,6 +161,7 @@ async def run_claude_code(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
+        env=_env_for_claude_subprocess(),
     )
 
     try:
