@@ -209,7 +209,7 @@ def _detect_claude_code_version() -> str:
     return _CLAUDE_CODE_VERSION_FALLBACK
 
 
-_CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+_CLAUDE_CODE_SYSTEM_PREFIX = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 _MCP_TOOL_PREFIX = "mcp_"
 
 
@@ -1554,9 +1554,9 @@ def build_anthropic_kwargs(
         betas.append(_FAST_MODE_BETA)
         kwargs["extra_headers"] = {"anthropic-beta": ",".join(betas)}
 
-        kwargs["context_management"] = {
-            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-        }
+    kwargs["context_management"] = {
+        "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+    }
 
     kwargs["extra_query"] = {"beta": "true"}
 
