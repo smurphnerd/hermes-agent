@@ -148,6 +148,12 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
+    "claude-code": ProviderConfig(
+        id="claude-code",
+        name="Claude Code CLI",
+        auth_type="external_process",
+        inference_base_url="",
+    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",

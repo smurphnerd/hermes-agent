@@ -955,6 +955,13 @@ def list_authenticated_providers(
                     has_creds = True
             except Exception as exc:
                 logger.debug("Anthropic external creds check failed: %s", exc)
+        # claude-code uses the `claude` CLI binary for auth — if the binary
+        # is on PATH, treat it as authenticated (Claude Code handles the
+        # actual login itself).
+        if not has_creds and hermes_slug == "claude-code":
+            import shutil as _shutil
+            if _shutil.which("claude") is not None:
+                has_creds = True
         if not has_creds:
             continue
 

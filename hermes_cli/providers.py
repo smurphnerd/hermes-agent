@@ -218,7 +218,6 @@ ALIASES: Dict[str, str] = {
 
     # anthropic
     "claude": "anthropic",
-    "claude-code": "anthropic",
 
     # github-copilot (models.dev ID)
     "copilot": "github-copilot",
@@ -300,6 +299,7 @@ _LABEL_OVERRIDES: Dict[str, str] = {
     "local": "Local endpoint",
     "bedrock": "AWS Bedrock",
     "ollama-cloud": "Ollama Cloud",
+    "claude-code": "Claude Code CLI",
 }
 
 
