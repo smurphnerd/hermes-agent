@@ -9351,6 +9351,16 @@ class AIAgent:
                         elif not content_blocks:
                             response_invalid = True
                             error_details.append("response.content is empty")
+                    elif self.api_mode == "claude_code":
+                        # claude_code returns an already-normalized
+                        # (assistant_message, finish_reason) tuple from
+                        # _interruptible_api_call. Validate the tuple shape.
+                        if response is None:
+                            response_invalid = True
+                            error_details.append("response is None")
+                        elif not (isinstance(response, tuple) and len(response) == 2):
+                            response_invalid = True
+                            error_details.append(f"response is not a (msg, reason) tuple (got {type(response).__name__})")
                     else:
                         if response is None or not hasattr(response, 'choices') or response.choices is None or not response.choices:
                             response_invalid = True
