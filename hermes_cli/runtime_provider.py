@@ -134,7 +134,7 @@ def _copilot_runtime_api_mode(model_cfg: Dict[str, Any], api_key: str) -> str:
         return "chat_completions"
 
 
-_VALID_API_MODES = {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse"}
+_VALID_API_MODES = {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "claude_code"}
 
 
 def _parse_api_mode(raw: Any) -> Optional[str]:
@@ -852,6 +852,22 @@ def resolve_runtime_provider(
             "command": creds.get("command", ""),
             "args": list(creds.get("args") or []),
             "source": creds.get("source", "process"),
+            "requested_provider": requested_provider,
+        }
+
+    if provider == "claude-code":
+        import shutil as _shutil
+        if _shutil.which("claude") is None:
+            raise AuthError(
+                "Claude Code CLI (`claude`) not found on PATH. "
+                "Install it from https://docs.anthropic.com/en/docs/claude-code"
+            )
+        return {
+            "provider": "claude-code",
+            "api_mode": "claude_code",
+            "base_url": "",
+            "api_key": "",
+            "source": "external_process",
             "requested_provider": requested_provider,
         }
 
