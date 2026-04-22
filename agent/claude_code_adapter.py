@@ -314,6 +314,19 @@ def build_claude_code_kwargs(
         elif role == "user":
             user_prompt = _extract_text_from_content(msg.get("content", ""))
 
+    # Diagnostic override: when HERMES_CLAUDE_CODE_SKIP_SYSTEM_PROMPT=1,
+    # drop hermes's system prompt entirely. Lets us isolate whether a
+    # failure is caused by the system-prompt content vs. the subprocess
+    # invocation. Claude Code will fall back to its own default prompt.
+    if os.environ.get("HERMES_CLAUDE_CODE_SKIP_SYSTEM_PROMPT", "").strip() in ("1", "true", "yes"):
+        if system_prompt:
+            logger.info(
+                "HERMES_CLAUDE_CODE_SKIP_SYSTEM_PROMPT is set — dropping hermes system prompt (%d chars) "
+                "and letting claude use its own default.",
+                len(system_prompt),
+            )
+        system_prompt = None
+
     effort = None
     if reasoning_config and isinstance(reasoning_config, dict):
         effort = reasoning_config.get("effort")
