@@ -5426,6 +5426,11 @@ class AIAgent:
             finally:
                 self._codex_on_first_delta = None
 
+        # Claude Code CLI shells out to `claude -p` and doesn't support
+        # streaming in this adapter — delegate to the non-streaming path.
+        if self.api_mode == "claude_code":
+            return self._interruptible_api_call(api_kwargs)
+
         # Bedrock Converse uses boto3's converse_stream() with real-time delta
         # callbacks — same UX as Anthropic and chat_completions streaming.
         if self.api_mode == "bedrock_converse":
@@ -6370,6 +6375,12 @@ class AIAgent:
         retries through them are exhausted, one more rebuilt client won't help.
         """
         if self._fallback_activated:
+            return False
+
+        # claude_code uses a subprocess, not an OpenAI/Anthropic client —
+        # there is nothing to rebuild and the primary snapshot doesn't
+        # contain client_kwargs for it.
+        if self.api_mode == "claude_code":
             return False
 
         # Only for transient transport errors
@@ -8630,7 +8641,8 @@ class AIAgent:
         # Pre-turn connection health check: detect and clean up dead TCP
         # connections left over from provider outages or dropped streams.
         # This prevents the next API call from hanging on a zombie socket.
-        if self.api_mode != "anthropic_messages":
+        # Skipped for modes that don't use the shared OpenAI client.
+        if self.api_mode not in ("anthropic_messages", "bedrock_converse", "claude_code"):
             try:
                 if self._cleanup_dead_connections():
                     self._emit_status(
