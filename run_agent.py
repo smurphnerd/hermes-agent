@@ -5188,7 +5188,9 @@ class AIAgent:
                     cc_kwargs = {k: v for k, v in api_kwargs.items() if not k.startswith("__")}
                     loop = asyncio.new_event_loop()
                     try:
-                        raw_result = loop.run_until_complete(run_claude_code(**cc_kwargs))
+                        raw_result = loop.run_until_complete(
+                            run_claude_code(**cc_kwargs, process_holder=request_client_holder)
+                        )
                     finally:
                         loop.close()
                     if raw_result.get("session_id"):
@@ -5258,6 +5260,19 @@ class AIAgent:
                             getattr(self, "_anthropic_base_url", None),
                             timeout=get_provider_request_timeout(self.provider, self.model),
                         )
+                    elif self.api_mode == "claude_code":
+                        # The worker thread is blocked in
+                        # loop.run_until_complete(run_claude_code(...)).
+                        # Closing httpx clients does nothing here — the
+                        # call is a subprocess. Kill it directly so the
+                        # worker thread unblocks and the retry can proceed
+                        # without leaving a zombie `claude -p` running.
+                        proc = request_client_holder.get("process")
+                        if proc is not None:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
                     else:
                         rc = request_client_holder.get("client")
                         if rc is not None:

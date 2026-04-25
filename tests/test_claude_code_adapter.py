@@ -319,6 +319,77 @@ def test_build_kwargs_no_system():
     assert kwargs["prompt"] == "hi"
 
 
+def test_build_kwargs_inlines_prior_turns_as_transcript():
+    """Prior user/assistant turns must be inlined into the prompt.
+    Hermes is the source of truth for transcript state — relying on
+    --resume <session_id> drops context across agent re-spawn.
+    """
+    from agent.claude_code_adapter import build_claude_code_kwargs
+
+    messages = [
+        {"role": "user", "content": "what's 2+2"},
+        {"role": "assistant", "content": "4"},
+        {"role": "user", "content": "and times 3"},
+    ]
+    kwargs = build_claude_code_kwargs(model="sonnet", messages=messages)
+    assert "<conversation-history>" in kwargs["prompt"]
+    assert "User: what's 2+2" in kwargs["prompt"]
+    assert "Assistant: 4" in kwargs["prompt"]
+    assert "</conversation-history>" in kwargs["prompt"]
+    assert kwargs["prompt"].endswith("and times 3")
+    # Latest user turn must NOT also appear inside the history block.
+    history_block = kwargs["prompt"].split("</conversation-history>")[0]
+    assert "and times 3" not in history_block
+
+
+def test_build_kwargs_does_not_pass_session_id():
+    """Adapter no longer forwards session_id — context is inlined instead."""
+    from agent.claude_code_adapter import build_claude_code_kwargs
+
+    kwargs = build_claude_code_kwargs(
+        model="sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+        session_id="some-old-session",
+    )
+    assert "session_id" not in kwargs
+
+
+def test_build_kwargs_disables_tools_by_default():
+    """Hermes provides its own tool layer; Claude Code's internal tools
+    are disabled by default to avoid multi-minute agentic runs on chat replies.
+    """
+    from agent.claude_code_adapter import build_claude_code_kwargs
+
+    kwargs = build_claude_code_kwargs(
+        model="sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert kwargs.get("disable_tools") is True
+
+
+def test_build_kwargs_tools_opt_in_via_env(monkeypatch):
+    from agent.claude_code_adapter import build_claude_code_kwargs
+
+    monkeypatch.setenv("HERMES_CLAUDE_CODE_ENABLE_TOOLS", "1")
+    kwargs = build_claude_code_kwargs(
+        model="sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert "disable_tools" not in kwargs
+
+
+def test_build_kwargs_explicit_disable_tools_overrides_env(monkeypatch):
+    from agent.claude_code_adapter import build_claude_code_kwargs
+
+    monkeypatch.setenv("HERMES_CLAUDE_CODE_ENABLE_TOOLS", "1")
+    kwargs = build_claude_code_kwargs(
+        model="sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+        disable_tools=True,
+    )
+    assert kwargs.get("disable_tools") is True
+
+
 def test_build_kwargs_multimodal_content_list():
     from agent.claude_code_adapter import build_claude_code_kwargs
 

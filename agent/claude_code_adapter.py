@@ -145,6 +145,7 @@ async def run_claude_code(
     timeout: Optional[float] = None,
     extra_flags: Optional[List[str]] = None,
     cwd: Optional[str] = None,
+    process_holder: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cmd = build_claude_code_command(
         prompt=prompt,
@@ -189,6 +190,9 @@ async def run_claude_code(
         cwd=cwd,
         env=_env_for_claude_subprocess(),
     )
+
+    if process_holder is not None:
+        process_holder["process"] = process
 
     try:
         if timeout is not None:
@@ -297,7 +301,7 @@ def build_claude_code_kwargs(
     reasoning_config: Optional[Dict] = None,
     session_id: Optional[str] = None,
     max_budget_usd: Optional[float] = None,
-    disable_tools: bool = False,
+    disable_tools: Optional[bool] = None,
     allowed_tools: Optional[List[str]] = None,
     persist_session: bool = True,
     timeout: Optional[float] = None,
@@ -305,43 +309,74 @@ def build_claude_code_kwargs(
     cwd: Optional[str] = None,
 ) -> Dict[str, Any]:
     hermes_system_prompt = None
-    user_prompt = ""
+    transcript: List[Tuple[str, str]] = []
+    latest_user_prompt = ""
 
     for msg in messages:
         role = msg.get("role", "")
+        text = _extract_text_from_content(msg.get("content", ""))
         if role == "system":
-            hermes_system_prompt = _extract_text_from_content(msg.get("content", ""))
-        elif role == "user":
-            user_prompt = _extract_text_from_content(msg.get("content", ""))
+            hermes_system_prompt = text
+        elif role in ("user", "assistant"):
+            transcript.append((role, text))
+
+    # The last user turn is what we're asking claude to respond to.
+    # Everything before it is prior conversation history.
+    if transcript and transcript[-1][0] == "user":
+        latest_user_prompt = transcript[-1][1]
+        prior_turns = transcript[:-1]
+    else:
+        prior_turns = transcript
 
     # Passing hermes's full ~30k-char system prompt via --system-prompt
     # replaces Claude Code's own default identity/tool instructions, and
     # Anthropic's quota-check rejects the call with "out of extra usage"
     # before it even reaches the API (observed with Opus 4.6 on Pro OAuth).
-    #
     # Workaround: leave Claude Code's default system prompt intact and
-    # prepend hermes's system prompt to the user message wrapped in
-    # <system-instructions> tags. Claude treats tagged content as a
-    # secondary instruction block while still operating under its own
-    # identity + tools, which keeps the call within the standard tier.
+    # tag-wrap hermes's prompt in the user message. Claude treats tagged
+    # content as a secondary instruction block, which keeps the call on
+    # the standard tier.
+    #
+    # Conversation history is inlined the same way rather than relying on
+    # --resume <session_id>. Hermes is the source of truth for transcript
+    # state (it persists per-thread to SQLite); the in-memory session_id
+    # was lost on agent re-spawn and discord threads silently went
+    # contextless. Always inlining transcript = no cross-call state.
+    parts: List[str] = []
     if hermes_system_prompt:
-        user_prompt = (
+        parts.append(
             "<system-instructions>\n"
             f"{hermes_system_prompt}\n"
-            "</system-instructions>\n\n"
-            f"{user_prompt}"
+            "</system-instructions>"
         )
+    if prior_turns:
+        history_lines = ["<conversation-history>"]
+        for role, text in prior_turns:
+            label = "User" if role == "user" else "Assistant"
+            history_lines.append(f"{label}: {text}")
+        history_lines.append("</conversation-history>")
+        parts.append("\n".join(history_lines))
+    parts.append(latest_user_prompt)
+    user_prompt = "\n\n".join(p for p in parts if p)
 
     effort = None
     if reasoning_config and isinstance(reasoning_config, dict):
         effort = reasoning_config.get("effort")
 
+    # Default: disable Claude Code's internal tool layer. Hermes already
+    # provides its own tool layer, and leaving claude's enabled turns every
+    # chat reply into a multi-turn agentic run (Read/Bash/Glob/etc.) which
+    # routinely takes 5–10 minutes — way past the watchdog timeout.
+    # Opt back in with HERMES_CLAUDE_CODE_ENABLE_TOOLS=1.
+    if disable_tools is None:
+        disable_tools = os.environ.get(
+            "HERMES_CLAUDE_CODE_ENABLE_TOOLS", ""
+        ).strip().lower() not in ("1", "true", "yes")
+
     kwargs: Dict[str, Any] = {
         "prompt": user_prompt,
         "model": model,
     }
-    if session_id:
-        kwargs["session_id"] = session_id
     if effort:
         kwargs["effort"] = effort
     if max_budget_usd is not None:
