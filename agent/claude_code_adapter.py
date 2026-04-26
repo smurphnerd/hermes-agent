@@ -289,6 +289,10 @@ _TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL
 )
 
+_TOOL_RESULT_PATTERN = re.compile(
+    r"<tool_result[^>]*>\s*.*?\s*</tool_result>", re.DOTALL
+)
+
 
 def _parse_tool_calls_from_text(text: str) -> Tuple[str, List[SimpleNamespace]]:
     """Extract <tool_call> blocks from assistant text.
@@ -371,6 +375,8 @@ def normalize_claude_code_response(
         cache_read_input_tokens=raw_usage.get("cache_read_input_tokens", 0),
         total_cost_usd=result.get("total_cost_usd", 0),
     )
+
+    content = _TOOL_RESULT_PATTERN.sub("", content).strip()
 
     tool_calls = None
     if parse_tool_calls:
