@@ -12,7 +12,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+import uuid
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -109,7 +111,7 @@ def build_claude_code_command(
     persist_session: bool = True,
     extra_flags: Optional[List[str]] = None,
 ) -> List[str]:
-    cmd = ["claude", "-p", "--output-format", "json"]
+    cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
     cmd.extend(["--model", model])
     if system_prompt:
         cmd.extend(["--system-prompt", system_prompt])
@@ -120,7 +122,7 @@ def build_claude_code_command(
     if max_budget_usd is not None:
         cmd.extend(["--max-budget-usd", str(max_budget_usd)])
     if disable_tools:
-        cmd.extend(["--tools", ""])
+        cmd.append("--tools=")
     if allowed_tools:
         cmd.extend(["--allowedTools", ",".join(allowed_tools)])
     if not persist_session:
@@ -245,8 +247,113 @@ async def run_claude_code(
     return result
 
 
+def _format_tools_for_prompt(tools: List[Dict]) -> str:
+    """Format OpenAI-style tool definitions into an XML block for the prompt.
+
+    Returns a string like:
+        <available-tools>
+        [{"name": "web_search", "description": "...", "parameters": {...}}, ...]
+        </available-tools>
+
+        To call a tool, output one or more <tool_call> blocks: ...
+    """
+    if not tools:
+        return ""
+    formatted = []
+    for tool in tools:
+        func = tool.get("function", tool)
+        formatted.append({
+            "name": func["name"],
+            "description": func.get("description", ""),
+            "parameters": func.get("parameters", {}),
+        })
+    lines = [
+        "<available-tools>",
+        json.dumps(formatted, ensure_ascii=False),
+        "</available-tools>",
+        "",
+        "To call a tool, output one or more <tool_call> blocks in your response EXACTLY like this:",
+        '<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>',
+        "",
+        "Rules for tool calls:",
+        "- You may include text before, between, or after tool_call blocks.",
+        "- Each <tool_call> block must contain valid JSON with \"name\" and \"arguments\" keys.",
+        "- arguments must be an object matching the tool's parameter schema.",
+        "- You will receive tool results in <tool_result> blocks and can then continue.",
+        "- When you have enough information to answer, respond with plain text (no tool_call blocks).",
+    ]
+    return "\n".join(lines)
+
+
+_TOOL_CALL_PATTERN = re.compile(
+    r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL
+)
+
+
+def _parse_tool_calls_from_text(text: str) -> Tuple[str, List[SimpleNamespace]]:
+    """Extract <tool_call> blocks from assistant text.
+
+    Returns (cleaned_text, tool_calls) where cleaned_text has the blocks
+    removed and tool_calls is a list of SimpleNamespace objects matching
+    the shape expected by run_agent.py's tool execution loop.
+    """
+    matches = list(_TOOL_CALL_PATTERN.finditer(text))
+    if not matches:
+        return text, []
+
+    tool_calls = []
+    for match in matches:
+        raw = match.group(1).strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Skipping malformed tool_call JSON: %s", raw[:200])
+            continue
+
+        name = parsed.get("name", "")
+        arguments = parsed.get("arguments", {})
+        if isinstance(arguments, dict):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+
+        call_id = f"call_{uuid.uuid4().hex[:24]}"
+        tool_calls.append(SimpleNamespace(
+            id=call_id,
+            type="function",
+            function=SimpleNamespace(
+                name=name,
+                arguments=arguments,
+            ),
+        ))
+
+    cleaned = _TOOL_CALL_PATTERN.sub("", text).strip()
+    return cleaned, tool_calls
+
+
+def _format_tool_results_for_prompt(messages: List[Dict[str, Any]]) -> str:
+    """Format trailing tool-result messages into <tool_result> blocks.
+
+    When the agent loop executes tools and feeds results back, the messages
+    list ends with an assistant message followed by one or more role=tool
+    messages. This function converts those into text that gets appended to
+    the next prompt so Claude Code sees the results.
+    """
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "")
+        if role == "tool":
+            tool_call_id = msg.get("tool_call_id", "")
+            content = msg.get("content", "")
+            parts.append(
+                f'<tool_result tool_call_id="{tool_call_id}">\n'
+                f"{content}\n"
+                f"</tool_result>"
+            )
+    return "\n\n".join(parts)
+
+
 def normalize_claude_code_response(
     result: Dict[str, Any],
+    parse_tool_calls: bool = False,
 ) -> Tuple[SimpleNamespace, str]:
     content = result.get("result", "") or ""
     stop_reason = result.get("stop_reason", "end_turn")
@@ -265,10 +372,16 @@ def normalize_claude_code_response(
         total_cost_usd=result.get("total_cost_usd", 0),
     )
 
+    tool_calls = None
+    if parse_tool_calls:
+        content, parsed_calls = _parse_tool_calls_from_text(content)
+        if parsed_calls:
+            tool_calls = parsed_calls
+
     msg = SimpleNamespace(
         role="assistant",
         content=content,
-        tool_calls=None,
+        tool_calls=tool_calls,
         reasoning=None,
         reasoning_details=None,
         usage=usage,
@@ -311,6 +424,7 @@ def build_claude_code_kwargs(
     hermes_system_prompt = None
     transcript: List[Tuple[str, str]] = []
     latest_user_prompt = ""
+    trailing_tool_results: List[Dict[str, Any]] = []
 
     for msg in messages:
         role = msg.get("role", "")
@@ -319,6 +433,9 @@ def build_claude_code_kwargs(
             hermes_system_prompt = text
         elif role in ("user", "assistant"):
             transcript.append((role, text))
+            trailing_tool_results = []
+        elif role == "tool":
+            trailing_tool_results.append(msg)
 
     # The last user turn is what we're asking claude to respond to.
     # Everything before it is prior conversation history.
@@ -328,20 +445,6 @@ def build_claude_code_kwargs(
     else:
         prior_turns = transcript
 
-    # Passing hermes's full ~30k-char system prompt via --system-prompt
-    # replaces Claude Code's own default identity/tool instructions, and
-    # Anthropic's quota-check rejects the call with "out of extra usage"
-    # before it even reaches the API (observed with Opus 4.6 on Pro OAuth).
-    # Workaround: leave Claude Code's default system prompt intact and
-    # tag-wrap hermes's prompt in the user message. Claude treats tagged
-    # content as a secondary instruction block, which keeps the call on
-    # the standard tier.
-    #
-    # Conversation history is inlined the same way rather than relying on
-    # --resume <session_id>. Hermes is the source of truth for transcript
-    # state (it persists per-thread to SQLite); the in-memory session_id
-    # was lost on agent re-spawn and discord threads silently went
-    # contextless. Always inlining transcript = no cross-call state.
     parts: List[str] = []
     if hermes_system_prompt:
         parts.append(
@@ -349,6 +452,13 @@ def build_claude_code_kwargs(
             f"{hermes_system_prompt}\n"
             "</system-instructions>"
         )
+
+    # Inject tool definitions so the model can call hermes tools via XML.
+    if tools:
+        tools_block = _format_tools_for_prompt(tools)
+        if tools_block:
+            parts.append(tools_block)
+
     if prior_turns:
         history_lines = ["<conversation-history>"]
         for role, text in prior_turns:
@@ -356,22 +466,37 @@ def build_claude_code_kwargs(
             history_lines.append(f"{label}: {text}")
         history_lines.append("</conversation-history>")
         parts.append("\n".join(history_lines))
-    parts.append(latest_user_prompt)
+
+    # If this call is a tool-result continuation (the agent loop executed
+    # tools and is feeding results back), include the results so the model
+    # can see them and continue.
+    if trailing_tool_results:
+        tool_results_block = _format_tool_results_for_prompt(trailing_tool_results)
+        if tool_results_block:
+            parts.append(
+                "Here are the results of the tool calls you made:\n\n"
+                + tool_results_block
+                + "\n\nContinue based on these results."
+            )
+    else:
+        parts.append(latest_user_prompt)
+
     user_prompt = "\n\n".join(p for p in parts if p)
 
     effort = None
     if reasoning_config and isinstance(reasoning_config, dict):
         effort = reasoning_config.get("effort")
 
-    # Default: disable Claude Code's internal tool layer. Hermes already
-    # provides its own tool layer, and leaving claude's enabled turns every
-    # chat reply into a multi-turn agentic run (Read/Bash/Glob/etc.) which
-    # routinely takes 5–10 minutes — way past the watchdog timeout.
-    # Opt back in with HERMES_CLAUDE_CODE_ENABLE_TOOLS=1.
+    # Default: leave Claude Code's internal tools enabled. Claude Code
+    # handles tool execution internally and returns the final text result.
+    # Hermes's own tool layer is skipped for claude_code api_mode (tools
+    # can't round-trip through a subprocess), so Claude Code's built-in
+    # tools are the only way the agent gets file/bash access.
+    # Opt out with HERMES_CLAUDE_CODE_DISABLE_TOOLS=1.
     if disable_tools is None:
         disable_tools = os.environ.get(
-            "HERMES_CLAUDE_CODE_ENABLE_TOOLS", ""
-        ).strip().lower() not in ("1", "true", "yes")
+            "HERMES_CLAUDE_CODE_DISABLE_TOOLS", ""
+        ).strip().lower() in ("1", "true", "yes")
 
     kwargs: Dict[str, Any] = {
         "prompt": user_prompt,

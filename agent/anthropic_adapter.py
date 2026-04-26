@@ -1554,8 +1554,14 @@ def build_anthropic_kwargs(
         betas.append(_FAST_MODE_BETA)
         kwargs["extra_headers"] = {"anthropic-beta": ",".join(betas)}
 
-    kwargs["context_management"] = {
-        "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+    # Claude Code context management
+    kwargs.setdefault("extra_body", {})["context_management"] = {
+        "edits": [
+            {
+                "type": "clear_thinking_20251015",
+                "keep": "all"
+            }
+        ]
     }
 
     kwargs["extra_query"] = {"beta": "true"}

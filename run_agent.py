@@ -1292,13 +1292,17 @@ class AIAgent:
                 print(f"🔄 Fallback chain ({len(self._fallback_chain)} providers): " +
                       " → ".join(f"{f['model']} ({f['provider']})" for f in self._fallback_chain))
 
-        # Get available tools with filtering
+        # Get available tools with filtering.
+        # Claude Code adapter: load tools for system-prompt awareness (so the
+        # model knows about cron, memory, skills, etc.) but don't pass schemas
+        # to the API — Claude Code can't make function calls back to hermes.
+        # The schemas are already excluded in _build_api_kwargs for claude_code.
         self.tools = get_tool_definitions(
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,
             quiet_mode=self.quiet_mode,
         )
-        
+
         # Show tool configuration and store valid tool names for validation
         self.valid_tool_names = set()
         if self.tools:
@@ -1306,7 +1310,7 @@ class AIAgent:
             tool_names = sorted(self.valid_tool_names)
             if not self.quiet_mode:
                 print(f"🛠️  Loaded {len(self.tools)} tools: {', '.join(tool_names)}")
-                
+
                 # Show filtering info if applied
                 if enabled_toolsets:
                     print(f"   ✅ Enabled toolsets: {', '.join(enabled_toolsets)}")
@@ -2316,14 +2320,29 @@ class AIAgent:
 
         return 300.0, True
 
-    def _compute_non_stream_stale_timeout(self, messages: list[dict[str, Any]]) -> float:
+    def _compute_non_stream_stale_timeout(
+        self, messages: list[dict[str, Any]], *, api_kwargs: dict | None = None,
+    ) -> float:
         """Compute the effective non-stream stale timeout for this request."""
         stale_base, uses_implicit_default = self._resolved_api_call_stale_timeout_base()
         base_url = getattr(self, "_base_url", None) or self.base_url or ""
         if uses_implicit_default and base_url and is_local_endpoint(base_url):
             return float("inf")
 
-        est_tokens = sum(len(str(v)) for v in messages) // 4
+        # For claude_code, messages is empty (the adapter flattens them into
+        # a prompt string).  Estimate from the prompt instead.
+        if not messages and api_kwargs and "prompt" in api_kwargs:
+            est_tokens = len(api_kwargs["prompt"]) // 4
+        else:
+            est_tokens = sum(len(str(v)) for v in messages) // 4
+
+        # claude_code with tools enabled runs as an agent — tool calls can
+        # easily exceed a simple API round-trip.  Use a generous floor.
+        if self.api_mode == "claude_code" and uses_implicit_default:
+            disable_tools = api_kwargs.get("disable_tools", False) if api_kwargs else False
+            if not disable_tools:
+                return max(stale_base, 900.0)
+
         if est_tokens > 100_000:
             return max(stale_base, 600.0)
         if est_tokens > 50_000:
@@ -5195,7 +5214,10 @@ class AIAgent:
                         loop.close()
                     if raw_result.get("session_id"):
                         self._claude_code_session_id = raw_result["session_id"]
-                    result["response"] = normalize_claude_code_response(raw_result)
+                    result["response"] = normalize_claude_code_response(
+                        raw_result,
+                        parse_tool_calls=bool(self.tools),
+                    )
                 else:
                     request_client_holder["client"] = self._create_request_openai_client(reason="chat_completion_request")
                     result["response"] = request_client_holder["client"].chat.completions.create(**api_kwargs)
@@ -5213,7 +5235,7 @@ class AIAgent:
         # detector kills the connection early so the main retry loop can
         # apply richer recovery (credential rotation, provider fallback).
         _stale_timeout = self._compute_non_stream_stale_timeout(
-            api_kwargs.get("messages", [])
+            api_kwargs.get("messages", []), api_kwargs=api_kwargs,
         )
 
         _call_start = time.time()
@@ -6707,6 +6729,7 @@ class AIAgent:
                 **build_claude_code_kwargs(
                     model=self.model,
                     messages=api_messages,
+                    tools=self.tools if self.tools else None,
                     reasoning_config=self.reasoning_config,
                     session_id=getattr(self, "_claude_code_session_id", None),
                 ),
