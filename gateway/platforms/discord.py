@@ -2511,6 +2511,22 @@ class DiscordAdapter(BasePlatformAdapter):
             return {part.strip() for part in raw.split(",") if part.strip()}
         return set()
 
+    def _discord_mention_required_guilds(self) -> set:
+        """Return Discord guild IDs where a bot mention is always required.
+
+        Overrides the global ``require_mention`` setting for these guilds:
+        even if mentions are off globally, channels in these guilds will only
+        respond when the bot is @mentioned (free_response_channels still wins).
+        """
+        raw = self.config.extra.get("mention_required_guilds")
+        if raw is None:
+            raw = os.getenv("DISCORD_MENTION_REQUIRED_GUILDS", "")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        if isinstance(raw, str) and raw.strip():
+            return {part.strip() for part in raw.split(",") if part.strip()}
+        return set()
+
     def _thread_parent_channel(self, channel: Any) -> Any:
         """Return the parent text channel when invoked from a thread."""
         return getattr(channel, "parent", None) or channel
@@ -2961,6 +2977,8 @@ class DiscordAdapter(BasePlatformAdapter):
         # Config (all settable via discord.* in config.yaml or DISCORD_* env vars):
         #   discord.require_mention: Require @mention in server channels (default: true)
         #   discord.free_response_channels: Channel IDs where bot responds without mention
+        #   discord.mention_required_guilds: Guild IDs where @mention is always required
+        #     (overrides require_mention=false; free_response_channels still wins)
         #   discord.ignored_channels: Channel IDs where bot NEVER responds (even when mentioned)
         #   discord.allowed_channels: If set, bot ONLY responds in these channels (whitelist)
         #   discord.no_thread_channels: Channel IDs where bot responds directly without creating thread
@@ -2999,6 +3017,11 @@ class DiscordAdapter(BasePlatformAdapter):
                 channel_ids.add(parent_channel_id)
 
             require_mention = self._discord_require_mention()
+            # Per-guild mention override: force mention-required for these
+            # guilds regardless of the global setting.
+            guild_id = str(message.guild.id) if message.guild else None
+            mention_required_guilds = self._discord_mention_required_guilds()
+            guild_requires_mention = guild_id is not None and guild_id in mention_required_guilds
             # Voice-linked text channels act as free-response while voice is active.
             # Only the exact bound channel gets the exemption, not sibling threads.
             voice_linked_ids = {str(ch_id) for ch_id in self._voice_text_channels.values()}
@@ -3010,7 +3033,7 @@ class DiscordAdapter(BasePlatformAdapter):
             # the bot has previously participated (auto-created or replied in).
             in_bot_thread = is_thread and thread_id in self._threads
 
-            if require_mention and not is_free_channel and not in_bot_thread:
+            if (require_mention or guild_requires_mention) and not is_free_channel and not in_bot_thread:
                 if self._client.user not in message.mentions:
                     return
 
